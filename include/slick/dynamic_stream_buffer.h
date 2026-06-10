@@ -92,8 +92,9 @@ public:
     /// Move n bytes from the writable area to the readable area
     void commit(std::size_t n) noexcept { buffer_->commit(n); }
 
-    /// Publish the first n readable bytes to consumers as one message record
-    void consume(std::size_t n) noexcept { buffer_->consume(n); }
+    /// Publish the first n readable bytes to consumers as one message record.
+    /// Returns the record as consumers will see it (asio/beast callers may ignore it).
+    SlickStreamBuffer::published_record consume(std::size_t n) noexcept { return buffer_->consume(n); }
 
     /// Access the underlying SlickStreamBuffer (e.g. for in-process consumers)
     SlickStreamBuffer& stream_buffer() noexcept { return *buffer_; }

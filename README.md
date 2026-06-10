@@ -152,7 +152,9 @@ number of messages (not bytes) a slow consumer may lag behind.
 
 - `std::pair<uint8_t*, size_t> prepare(size_t n)` — contiguous writable region; throws `std::length_error` if `size() + n > capacity()`
 - `void commit(size_t n)` — make n prepared bytes readable
-- `void consume(size_t n)` — publish the first n readable bytes as one message record
+- `published_record consume(size_t n)` — publish the first n readable bytes as one message
+  record; returns the record exactly as consumers will see it
+  (`{sequence, data, length}`, evaluates to `false` if nothing was published)
 - `const uint8_t* data()` / `size_t size()` — the readable (committed, unconsumed) region
 
 ### Consumer methods

@@ -68,8 +68,14 @@ TEST(StreamBufferTests, PrepareCommitConsumeReadRoundtrip) {
     EXPECT_EQ(buf.size(), 5u);
     EXPECT_EQ(std::memcmp(buf.data(), "hello", 5), 0);
 
-    buf.consume(5);
+    auto record = buf.consume(5);
     EXPECT_EQ(buf.size(), 0u);
+
+    // consume() returns the record exactly as consumers will see it
+    ASSERT_TRUE(static_cast<bool>(record));
+    EXPECT_EQ(record.sequence, 0u);
+    EXPECT_EQ(record.length, 5u);
+    EXPECT_EQ(std::memcmp(record.data, "hello", 5), 0);
 
     uint64_t cursor = 0;
     auto [ptr, len] = buf.read(cursor);
@@ -77,6 +83,7 @@ TEST(StreamBufferTests, PrepareCommitConsumeReadRoundtrip) {
     EXPECT_EQ(len, 5u);
     EXPECT_EQ(std::memcmp(ptr, "hello", 5), 0);
     EXPECT_EQ(cursor, 1u);
+    EXPECT_EQ(ptr, record.data);  // identical view, zero-copy
 
     auto [ptr2, len2] = buf.read(cursor);
     EXPECT_EQ(ptr2, nullptr);
@@ -86,9 +93,13 @@ TEST(StreamBufferTests, PrepareCommitConsumeReadRoundtrip) {
 TEST(StreamBufferTests, ConsumeSplitsIntoRecords) {
     SlickStreamBuffer buf(1024, 16);
     write_bytes(buf, "0123456789", 10);
-    buf.consume(4);
-    buf.consume(6);
+    auto r1 = buf.consume(4);
+    auto r2 = buf.consume(6);
     EXPECT_EQ(buf.size(), 0u);
+    EXPECT_EQ(r1.sequence, 0u);
+    EXPECT_EQ(r2.sequence, 1u);
+    EXPECT_EQ(r1.length, 4u);
+    EXPECT_EQ(r2.length, 6u);
 
     uint64_t cursor = 0;
     auto [p1, l1] = buf.read(cursor);
@@ -138,8 +149,9 @@ TEST(StreamBufferTests, CommitMoreThanPreparedClamps) {
 TEST(StreamBufferTests, ConsumeMoreThanSizeClamps) {
     SlickStreamBuffer buf(1024, 16);
     write_bytes(buf, "abcde", 5);
-    buf.consume(100);  // clamps to 5, publishes one 5-byte record
+    auto record = buf.consume(100);  // clamps to 5, publishes one 5-byte record
     EXPECT_EQ(buf.size(), 0u);
+    EXPECT_EQ(record.length, 5u);
 
     uint64_t cursor = 0;
     auto [ptr, len] = buf.read(cursor);
@@ -150,7 +162,10 @@ TEST(StreamBufferTests, ConsumeMoreThanSizeClamps) {
 TEST(StreamBufferTests, ConsumeZeroIsNoop) {
     SlickStreamBuffer buf(1024, 16);
     write_bytes(buf, "abc", 3);
-    buf.consume(0);
+    auto record = buf.consume(0);
+    EXPECT_FALSE(static_cast<bool>(record));  // nothing published
+    EXPECT_EQ(record.data, nullptr);
+    EXPECT_EQ(record.length, 0u);
     EXPECT_EQ(buf.size(), 3u);
 
     uint64_t cursor = 0;

@@ -46,15 +46,20 @@ TEST(DynamicStreamBufferTests, BufferCopyRoundtrip) {
     ASSERT_EQ(readable.size(), src.size());
     EXPECT_EQ(std::memcmp(readable.data(), src.data(), src.size()), 0);
 
-    dyn.consume(src.size());
+    auto record = dyn.consume(src.size());
     EXPECT_EQ(dyn.size(), 0u);
 
-    // consume() published the bytes as one record on the underlying stream buffer
+    // consume() returns the published record and the bytes are readable on the
+    // underlying stream buffer - both views are the same memory
+    ASSERT_TRUE(static_cast<bool>(record));
+    EXPECT_EQ(record.length, src.size());
+
     uint64_t cursor = 0;
     auto [ptr, len] = dyn.stream_buffer().read(cursor);
     ASSERT_NE(ptr, nullptr);
     ASSERT_EQ(len, src.size());
     EXPECT_EQ(std::memcmp(ptr, src.data(), len), 0);
+    EXPECT_EQ(ptr, record.data);
 }
 
 TEST(DynamicStreamBufferTests, MaxSizeClampsAndThrows) {

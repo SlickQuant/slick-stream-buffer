@@ -170,6 +170,19 @@ class SlickStreamBuffer {
 
 public:
     /**
+     * @brief The published message record as consumers will see it, returned by consume().
+     *
+     * Evaluates to false when nothing was published (zero-length consume). The data pointer
+     * stays valid until the producer laps this part of the ring.
+     */
+    struct published_record {
+        uint64_t sequence = kInvalidSeq;  ///< record sequence number (consumer cursor value)
+        const uint8_t* data = nullptr;    ///< message bytes, pointing into the ring
+        uint32_t length = 0;              ///< message length in bytes
+        explicit operator bool() const noexcept { return data != nullptr; }
+    };
+
+    /**
      * @brief Construct a new SlickStreamBuffer
      *
      * @param capacity Data ring size in bytes, must be a power of 2.
@@ -352,15 +365,18 @@ public:
      * @brief Publish the first n committed bytes to consumers as ONE message record.
      *
      * n is clamped to size(); a zero-length consume publishes nothing.
+     *
+     * @return The record as consumers will see it (sequence, data pointer, length), or an
+     *         empty record (data == nullptr) if nothing was published.
      */
-    void consume(std::size_t n) noexcept {
+    published_record consume(std::size_t n) noexcept {
         const uint64_t consumed = consumed_->load(std::memory_order_relaxed);
         const uint64_t avail = committed_->load(std::memory_order_relaxed) - consumed;
         if (n > avail) {  // clamp like flat_buffer: consuming more than size() consumes everything
             n = avail;
         }
         if (n == 0) {
-            return;
+            return {};
         }
         assert(n <= std::numeric_limits<uint32_t>::max() && "a single message must be < 4 GiB");
 
@@ -379,6 +395,7 @@ public:
         r.seq.store(seq, std::memory_order_release);  // publication edge, pairs with consumer acquire
 
         consumed_->store(consumed + n, std::memory_order_relaxed);
+        return { seq, data_ + (consumed & mask_), static_cast<uint32_t>(n) };
     }
 
     /**
