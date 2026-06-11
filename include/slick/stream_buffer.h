@@ -401,6 +401,27 @@ public:
     }
 
     /**
+     * @brief Discard the committed-but-unconsumed bytes and any prepared region
+     *        without publishing them.
+     *
+     * Use this when the byte stream is interrupted mid-message (e.g. a websocket
+     * disconnect after a partial read): the bytes already committed for the incomplete
+     * message must not be prepended to the data of the next connection. discard()
+     * itself does not publish a record, but older published records remain subject
+     * to the normal lossy overwrite semantics if a prepared region already wrapped
+     * over their bytes.
+     *
+     * Producer-side only: call from the producer thread, with no read operation
+     * outstanding on the buffer. A stale commit() after discard() commits nothing.
+     */
+    void discard() noexcept {
+        committed_cursor_ = consumed_cursor_;
+        // consumers never read committed_, relaxed is sufficient
+        committed_->store(committed_cursor_, std::memory_order_relaxed);
+        prepared_size_ = 0;
+    }
+
+    /**
      * @brief Pointer to the committed-but-unconsumed region (always contiguous).
      */
     const uint8_t* data() const noexcept {

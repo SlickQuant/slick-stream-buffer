@@ -96,6 +96,13 @@ public:
     /// Returns the record as consumers will see it (asio/beast callers may ignore it).
     SlickStreamBuffer::published_record consume(std::size_t n) noexcept { return buffer_->consume(n); }
 
+    /// Discard the readable bytes and any prepared region without publishing them,
+    /// matching beast::flat_buffer::clear(). Use after a connection drops mid-message
+    /// so the partial bytes are not prepended to the next connection's data. This
+    /// does not create a new record; older published records still follow the normal
+    /// lossy overwrite semantics.
+    void clear() noexcept { buffer_->discard(); }
+
     /// Access the underlying SlickStreamBuffer (e.g. for in-process consumers)
     SlickStreamBuffer& stream_buffer() noexcept { return *buffer_; }
     const SlickStreamBuffer& stream_buffer() const noexcept { return *buffer_; }

@@ -398,6 +398,122 @@ TEST(StreamBufferTests, MultiConsumerBroadcast) {
     EXPECT_EQ(buf.loss_count(), 0u);
 }
 
+TEST(StreamBufferTests, DiscardInvalidatesPartialMessage) {
+    SlickStreamBuffer buf(1024, 16);
+    uint64_t cursor = 0;
+
+    // a complete message is published, then a partial message is committed
+    // before the connection drops
+    write_bytes(buf, "complete", 8);
+    buf.consume(8);
+    write_bytes(buf, "part", 4);
+    ASSERT_EQ(buf.size(), 4u);
+
+    buf.discard();
+    EXPECT_EQ(buf.size(), 0u);
+
+    // the published record is still readable because the discarded bytes did not
+    // wrap over it
+    auto [p0, l0] = buf.read(cursor);
+    ASSERT_NE(p0, nullptr);
+    ASSERT_EQ(l0, 8u);
+    EXPECT_EQ(std::memcmp(p0, "complete", 8), 0);
+
+    // new connection: fresh bytes must not be contaminated by the discarded ones
+    write_bytes(buf, "fresh", 5);
+    EXPECT_EQ(buf.size(), 5u);
+    EXPECT_EQ(std::memcmp(buf.data(), "fresh", 5), 0);
+    buf.consume(5);
+    auto [p1, l1] = buf.read(cursor);
+    ASSERT_NE(p1, nullptr);
+    ASSERT_EQ(l1, 5u);
+    EXPECT_EQ(std::memcmp(p1, "fresh", 5), 0);
+    EXPECT_EQ(buf.loss_count(), 0u);
+}
+
+TEST(StreamBufferTests, DiscardKeepsOverwriteLossForLaggingConsumers) {
+    SlickStreamBuffer buf(64, 16);
+
+    publish_filled(buf, 'A', 40);
+
+    // A wrapped prepare can overwrite bytes of an older published record before
+    // the partial message is discarded. A lagging consumer must still observe loss.
+    auto [ptr, sz] = buf.prepare(32);
+    ASSERT_EQ(sz, 32u);
+    std::memset(ptr, 'X', sz);
+    buf.discard();
+
+    uint64_t cursor = 0;
+    auto [p0, l0] = buf.read(cursor);
+    EXPECT_EQ(p0, nullptr);
+    EXPECT_EQ(l0, 0u);
+    EXPECT_EQ(cursor, 1u);
+    EXPECT_EQ(buf.loss_count(), 1u);
+
+    write_bytes(buf, "ok", 2);
+    buf.consume(2);
+    auto [p1, l1] = buf.read(cursor);
+    ASSERT_NE(p1, nullptr);
+    ASSERT_EQ(l1, 2u);
+    EXPECT_EQ(std::memcmp(p1, "ok", 2), 0);
+}
+
+TEST(StreamBufferTests, DiscardDropsPreparedRegion) {
+    SlickStreamBuffer buf(1024, 16);
+    auto [ptr, sz] = buf.prepare(8);
+    std::memset(ptr, 'x', sz);
+
+    buf.discard();
+    buf.commit(8);  // a stale commit after discard must commit nothing
+    EXPECT_EQ(buf.size(), 0u);
+
+    write_bytes(buf, "ok", 2);
+    EXPECT_EQ(buf.size(), 2u);
+    EXPECT_EQ(std::memcmp(buf.data(), "ok", 2), 0);
+}
+
+TEST(StreamBufferTests, DiscardThenRefillAcrossWrap) {
+    SlickStreamBuffer buf(64, 16);
+    uint64_t cursor = 0;
+
+    publish_filled(buf, 'A', 40);
+    auto [p0, l0] = buf.read(cursor);
+    ASSERT_NE(p0, nullptr);
+    ASSERT_EQ(l0, 40u);
+
+    // partial message committed near the end of the ring, then dropped;
+    // reserve_end_ stays at its high-water mark and must not cause false loss
+    auto [ptr, sz] = buf.prepare(20);
+    ASSERT_EQ(sz, 20u);
+    std::memset(ptr, 'X', sz);
+    buf.commit(20);
+    buf.discard();
+    EXPECT_EQ(buf.size(), 0u);
+
+    // refill across the wrap and read every record back intact
+    for (int i = 0; i < 4; ++i) {
+        publish_filled(buf, static_cast<uint8_t>(i), 16);
+        auto [p, l] = buf.read(cursor);
+        ASSERT_NE(p, nullptr);
+        ASSERT_EQ(l, 16u);
+        for (uint32_t j = 0; j < l; ++j) EXPECT_EQ(p[j], i);
+    }
+    EXPECT_EQ(buf.loss_count(), 0u);
+}
+
+TEST(StreamBufferTests, DiscardOnEmptyBufferIsNoop) {
+    SlickStreamBuffer buf(1024, 16);
+    buf.discard();
+    EXPECT_EQ(buf.size(), 0u);
+
+    publish_filled(buf, 'a', 3);
+    buf.discard();  // nothing unconsumed - published record stays readable
+    uint64_t cursor = 0;
+    auto [ptr, len] = buf.read(cursor);
+    ASSERT_NE(ptr, nullptr);
+    EXPECT_EQ(len, 3u);
+}
+
 TEST(StreamBufferTests, Reset) {
     SlickStreamBuffer buf(1024, 16);
     publish_filled(buf, 'a', 10);

@@ -95,6 +95,49 @@ TEST(DynamicStreamBufferTests, DataRespectsMaxSizeWhenUnderlyingBufferIsLarger) 
     EXPECT_EQ(std::memcmp(readable.data(), "abcd", 4), 0);
 }
 
+TEST(DynamicStreamBufferTests, ClearDiscardsPartialMessageOnDisconnect) {
+    SlickStreamBuffer sb(1024, 16);
+    dynamic_stream_buffer dyn(sb);
+    uint64_t cursor = 0;
+
+    // first connection: one complete message published, then a partial read
+    // committed before the connection drops
+    const std::string complete = "complete-msg";
+    net::buffer_copy(dyn.prepare(complete.size()), net::buffer(complete));
+    dyn.commit(complete.size());
+    dyn.consume(complete.size());
+
+    const std::string partial = "part";
+    net::buffer_copy(dyn.prepare(partial.size()), net::buffer(partial));
+    dyn.commit(partial.size());
+    ASSERT_EQ(dyn.size(), partial.size());
+
+    // disconnect: the partial message is invalid for the next connection
+    dyn.clear();
+    EXPECT_EQ(dyn.size(), 0u);
+
+    // the record published before the disconnect is still readable here because
+    // the discarded bytes did not wrap over it
+    auto [p0, l0] = sb.read(cursor);
+    ASSERT_NE(p0, nullptr);
+    ASSERT_EQ(l0, complete.size());
+    EXPECT_EQ(std::memcmp(p0, complete.data(), l0), 0);
+
+    // reconnect: the new message must not contain the discarded bytes
+    const std::string fresh = "fresh-msg";
+    net::buffer_copy(dyn.prepare(fresh.size()), net::buffer(fresh));
+    dyn.commit(fresh.size());
+    auto record = dyn.consume(fresh.size());
+    ASSERT_TRUE(static_cast<bool>(record));
+    ASSERT_EQ(record.length, fresh.size());
+    EXPECT_EQ(std::memcmp(record.data, fresh.data(), record.length), 0);
+
+    auto [p1, l1] = sb.read(cursor);
+    ASSERT_NE(p1, nullptr);
+    ASSERT_EQ(l1, fresh.size());
+    EXPECT_EQ(std::memcmp(p1, fresh.data(), l1), 0);
+}
+
 TEST(DynamicStreamBufferTests, TcpLoopbackZeroCopyRead) {
     net::io_context ioc;
     tcp::acceptor acceptor(ioc, tcp::endpoint(net::ip::make_address("127.0.0.1"), 0));

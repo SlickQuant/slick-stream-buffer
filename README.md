@@ -155,6 +155,10 @@ number of messages (not bytes) a slow consumer may lag behind.
 - `published_record consume(size_t n)` — publish the first n readable bytes as one message
   record; returns the record exactly as consumers will see it
   (`{sequence, data, length}`, evaluates to `false` if nothing was published)
+- `void discard()` — drop the readable bytes and any prepared region **without publishing**;
+  this starts the next connection cleanly but older published records still follow the
+  normal lossy overwrite semantics (exposed as `clear()` on the adapter, matching
+  `beast::flat_buffer`)
 - `const uint8_t* data()` / `size_t size()` — the readable (committed, unconsumed) region
 
 ### Consumer methods
@@ -184,6 +188,13 @@ returned by `read()` stay valid until the producer laps that part of the ring.
 record. If a protocol layer consumes incrementally (e.g. the beast HTTP parser),
 records correspond to those increments; call `consume()` yourself on package
 boundaries when you need strict framing.
+
+**Disconnects mid-message.** If the connection drops after a partial message was
+committed, the leftover readable bytes are invalid for the next connection. Call
+`discard()` (or `clear()` on the adapter) before reconnecting so the partial bytes
+are not prepended to the new connection's data. `discard()` does not publish a
+record, but slow consumers can still lose older published records if the producer
+already wrapped a prepared region over those ring bytes.
 
 **Message size** is limited to < 4 GiB per record.
 

@@ -1,6 +1,12 @@
 # Changelog
 
-## unreleased
+## v1.0.2 - 2026-06-11
+- Added `SlickStreamBuffer::discard()` to drop committed-but-unconsumed bytes (and any
+  prepared region) without publishing them — for invalidating a partial message after a
+  connection drops mid-read. Older published records remain subject to the existing
+  lossy overwrite semantics.
+- Added `dynamic_stream_buffer::clear()` (matching `beast::flat_buffer::clear()`), which
+  forwards to `discard()`.
 - Update slick-shm fetching version to 0.1.4
 - Auto fetch slick-shm if not found in config cmake
 
