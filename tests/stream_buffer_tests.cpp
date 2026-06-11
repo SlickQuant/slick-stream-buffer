@@ -138,6 +138,21 @@ TEST(StreamBufferTests, RePrepareWithoutCommit) {
     EXPECT_EQ(buf.size(), 16u);
 }
 
+TEST(StreamBufferTests, PrepareZeroDoesNotDiscardPreparedBytes) {
+    SlickStreamBuffer buf(1024, 16);
+    auto [ptr, sz] = buf.prepare(8);
+    ASSERT_EQ(sz, 8u);
+    std::memcpy(ptr, "abcdefgh", 8);
+
+    auto [empty_ptr, empty_sz] = buf.prepare(0);
+    (void)empty_ptr;
+    EXPECT_EQ(empty_sz, 0u);
+
+    buf.commit(8);
+    EXPECT_EQ(buf.size(), 8u);
+    EXPECT_EQ(std::memcmp(buf.data(), "abcdefgh", 8), 0);
+}
+
 TEST(StreamBufferTests, CommitMoreThanPreparedClamps) {
     SlickStreamBuffer buf(1024, 16);
     auto [ptr, sz] = buf.prepare(8);

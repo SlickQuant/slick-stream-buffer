@@ -1,6 +1,17 @@
 # Changelog
 
-## v1.0.0
+## v1.0.1 - 2026-06-10
+
+- Fixed `SlickStreamBuffer::prepare(0)` so it no longer discards an outstanding
+  prepared region before `commit()`.
+- Fixed `dynamic_stream_buffer::data()` so its returned buffer size respects the
+  adapter `max_size()` cap and stays consistent with `size()`.
+- Reduced producer-side atomic load traffic by keeping local committed/consumed
+  cursor shadows for the single-producer hot path.
+- Added regression tests for zero-length prepare handling and DynamicBuffer
+  `data()`/`size()` consistency.
+
+## v1.0.0 - 2026-06-10
 
 Initial release.
 

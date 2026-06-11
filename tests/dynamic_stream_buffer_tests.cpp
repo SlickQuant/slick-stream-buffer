@@ -80,6 +80,21 @@ TEST(DynamicStreamBufferTests, MaxSizeClampsAndThrows) {
     EXPECT_EQ(dyn2.max_size(), sb.capacity());
 }
 
+TEST(DynamicStreamBufferTests, DataRespectsMaxSizeWhenUnderlyingBufferIsLarger) {
+    SlickStreamBuffer sb(1024, 16);
+    dynamic_stream_buffer dyn(sb, 4);
+
+    auto [ptr, sz] = sb.prepare(8);
+    ASSERT_EQ(sz, 8u);
+    std::memcpy(ptr, "abcdefgh", 8);
+    sb.commit(8);
+
+    EXPECT_EQ(dyn.size(), 4u);
+    auto readable = dyn.data();
+    EXPECT_EQ(readable.size(), 4u);
+    EXPECT_EQ(std::memcmp(readable.data(), "abcd", 4), 0);
+}
+
 TEST(DynamicStreamBufferTests, TcpLoopbackZeroCopyRead) {
     net::io_context ioc;
     tcp::acceptor acceptor(ioc, tcp::endpoint(net::ip::make_address("127.0.0.1"), 0));

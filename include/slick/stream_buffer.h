@@ -117,6 +117,8 @@ class SlickStreamBuffer {
 
     // producer-private
     uint64_t prepared_size_ = 0;     // size of the live prepare() region, 0 if none
+    uint64_t committed_cursor_ = 0;  // producer-local shadow of committed_
+    uint64_t consumed_cursor_ = 0;   // producer-local shadow of consumed_
 
     alignas(cacheline_size) std::atomic<uint64_t> committed_local_{ 0 };
     alignas(cacheline_size) std::atomic<uint64_t> consumed_local_{ 0 };
@@ -292,7 +294,7 @@ public:
      * A consumer starting at this cursor only sees records published after the call.
      */
     uint64_t initial_reading_index() const noexcept {
-        return next_seq_->load(std::memory_order_relaxed);
+        return next_seq_->load(std::memory_order_acquire);
     }
 
     // ------------------------------------------------------------------
@@ -310,38 +312,36 @@ public:
      */
     std::pair<uint8_t*, std::size_t> prepare(std::size_t n) {
         if (n == 0) [[unlikely]] {
-            prepared_size_ = 0;
-            return { nullptr, 0 };
+            return { data_ + (committed_cursor_ & mask_), 0 };
         }
-        uint64_t committed = committed_->load(std::memory_order_relaxed);
-        const uint64_t consumed = consumed_->load(std::memory_order_relaxed);
-        const uint64_t unconsumed = committed - consumed;
+        const uint64_t unconsumed = committed_cursor_ - consumed_cursor_;
         if (unconsumed + n > capacity_) [[unlikely]] {
             throw std::length_error("SlickStreamBuffer::prepare exceeds capacity");
         }
 
-        uint64_t pos = committed & mask_;
+        uint64_t pos = committed_cursor_ & mask_;
         if (pos + n > capacity_) {
             // Not enough contiguous space at the end of the ring: relocate the unconsumed
             // region to the ring start and jump the monotonic cursors to the next capacity
             // boundary. The relocated bytes are unpublished, so no consumer references them.
-            const uint64_t base = committed + (capacity_ - pos);  // next multiple of capacity_
+            const uint64_t base = committed_cursor_ + (capacity_ - pos);  // next multiple of capacity_
             // Mark the bytes about to be clobbered (ring [0, unconsumed + n)) as reserved
             // BEFORE writing, so consumers can detect the data lap.
             bump_reserve_end(base + unconsumed + n);
             if (unconsumed != 0) {
-                const uint64_t src = consumed & mask_;
+                const uint64_t src = consumed_cursor_ & mask_;
                 if (src != 0) {
                     std::memmove(data_, data_ + src, unconsumed);  // ranges can overlap
                 }
             }
-            consumed_->store(base, std::memory_order_relaxed);
-            committed = base + unconsumed;
-            committed_->store(committed, std::memory_order_relaxed);
+            consumed_cursor_ = base;
+            consumed_->store(consumed_cursor_, std::memory_order_relaxed);
+            committed_cursor_ = base + unconsumed;
+            committed_->store(committed_cursor_, std::memory_order_relaxed);
             pos = unconsumed;
         } else {
             // asio writes into the region before commit(), so reserve it now.
-            bump_reserve_end(committed + n);
+            bump_reserve_end(committed_cursor_ + n);
         }
         prepared_size_ = n;
         return { data_ + pos, n };
@@ -357,7 +357,8 @@ public:
             n = prepared_size_;
         }
         // consumers never read committed_, relaxed is sufficient
-        committed_->store(committed_->load(std::memory_order_relaxed) + n, std::memory_order_relaxed);
+        committed_cursor_ += n;
+        committed_->store(committed_cursor_, std::memory_order_relaxed);
         prepared_size_ -= n;
     }
 
@@ -370,8 +371,7 @@ public:
      *         empty record (data == nullptr) if nothing was published.
      */
     published_record consume(std::size_t n) noexcept {
-        const uint64_t consumed = consumed_->load(std::memory_order_relaxed);
-        const uint64_t avail = committed_->load(std::memory_order_relaxed) - consumed;
+        const uint64_t avail = committed_cursor_ - consumed_cursor_;
         if (n > avail) {  // clamp like flat_buffer: consuming more than size() consumes everything
             n = avail;
         }
@@ -390,11 +390,13 @@ public:
         // readers of a lapped slot observe "not ready" instead of torn fields. This does not
         // fully close the torn-read race (same caveat as SlickQueue).
         r.seq.store(kInvalidSeq, std::memory_order_relaxed);
-        r.offset = consumed;
+        r.offset = consumed_cursor_;
         r.length = static_cast<uint32_t>(n);
         r.seq.store(seq, std::memory_order_release);  // publication edge, pairs with consumer acquire
 
-        consumed_->store(consumed + n, std::memory_order_relaxed);
+        const uint64_t consumed = consumed_cursor_;
+        consumed_cursor_ += n;
+        consumed_->store(consumed_cursor_, std::memory_order_relaxed);
         return { seq, data_ + (consumed & mask_), static_cast<uint32_t>(n) };
     }
 
@@ -402,15 +404,14 @@ public:
      * @brief Pointer to the committed-but-unconsumed region (always contiguous).
      */
     const uint8_t* data() const noexcept {
-        return data_ + (consumed_->load(std::memory_order_relaxed) & mask_);
+        return data_ + (consumed_cursor_ & mask_);
     }
 
     /**
      * @brief Number of committed-but-unconsumed bytes.
      */
     std::size_t size() const noexcept {
-        return static_cast<std::size_t>(committed_->load(std::memory_order_relaxed) -
-                                        consumed_->load(std::memory_order_relaxed));
+        return static_cast<std::size_t>(committed_cursor_ - consumed_cursor_);
     }
 
     // ------------------------------------------------------------------
@@ -428,7 +429,7 @@ public:
             record& r = control_[cursor & control_mask_];
             const uint64_t seq = r.seq.load(std::memory_order_acquire);
 
-            if (seq != kInvalidSeq && seq >= next_seq_->load(std::memory_order_relaxed)) [[unlikely]] {
+            if (seq != kInvalidSeq && seq >= next_seq_->load(std::memory_order_acquire)) [[unlikely]] {
                 // the buffer has been reset
                 cursor = 0;
                 continue;
@@ -455,7 +456,7 @@ public:
             // while its bytes were already overwritten by prepare(). Detect via the prepared
             // high-water mark (best-effort). Checking the first byte suffices because
             // clobbering proceeds in offset order.
-            if (reserve_end_->load(std::memory_order_relaxed) - offset > capacity_) [[unlikely]] {
+            if (reserve_end_->load(std::memory_order_acquire) - offset > capacity_) [[unlikely]] {
 #if SLICK_STREAM_BUFFER_ENABLE_LOSS_DETECTION
                 loss_count_.fetch_add(1, std::memory_order_relaxed);
 #endif
@@ -488,7 +489,7 @@ public:
         }
         const uint64_t offset = r.offset;
         const uint32_t length = r.length;
-        if (reserve_end_->load(std::memory_order_relaxed) - offset > capacity_) [[unlikely]] {
+        if (reserve_end_->load(std::memory_order_acquire) - offset > capacity_) [[unlikely]] {
             return { nullptr, 0 };
         }
         return { data_ + (offset & mask_), length };
@@ -511,6 +512,8 @@ public:
         consumed_->store(0, std::memory_order_relaxed);
         reserve_end_->store(0, std::memory_order_relaxed);
         next_seq_->store(0, std::memory_order_release);
+        committed_cursor_ = 0;
+        consumed_cursor_ = 0;
         prepared_size_ = 0;
 #if SLICK_STREAM_BUFFER_ENABLE_LOSS_DETECTION
         loss_count_.store(0, std::memory_order_relaxed);
@@ -581,6 +584,8 @@ private:
         reserve_end_ = reinterpret_cast<std::atomic<uint64_t>*>(base + RESERVE_END_OFFSET);
         control_ = reinterpret_cast<record*>(base + HEADER_SIZE);
         data_ = base + HEADER_SIZE + sizeof(record) * control_size_;
+        committed_cursor_ = committed_->load(std::memory_order_relaxed);
+        consumed_cursor_ = consumed_->load(std::memory_order_relaxed);
     }
 
     void allocate_shm_data(const char* const shm_name, bool open_only) {

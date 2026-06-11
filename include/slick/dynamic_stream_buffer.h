@@ -74,7 +74,7 @@ public:
 
     /// The readable bytes as a single contiguous buffer
     const_buffers_type data() const noexcept {
-        return { buffer_->data(), buffer_->size() };
+        return { buffer_->data(), size() };
     }
 
     /**
