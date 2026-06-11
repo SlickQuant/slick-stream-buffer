@@ -1,5 +1,9 @@
 # Changelog
 
+## unreleased
+- Update slick-shm fetching version to 0.1.4
+- Auto fetch slick-shm if not found in config cmake
+
 ## v1.0.1 - 2026-06-10
 
 - Fixed `SlickStreamBuffer::prepare(0)` so it no longer discards an outstanding
