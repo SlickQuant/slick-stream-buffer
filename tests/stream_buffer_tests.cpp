@@ -15,14 +15,19 @@
 #include <atomic>
 #include <cstring>
 #include <thread>
+#include <type_traits>
 #include <vector>
 
-using slick::SlickStreamBuffer;
+using slick::stream_buffer;
+
+// SlickStreamBuffer is the compatibility spelling - it must keep naming the same type
+static_assert(std::is_same_v<slick::stream_buffer, slick::SlickStreamBuffer>,
+              "slick::stream_buffer must alias slick::SlickStreamBuffer");
 
 namespace {
 
 // prepare + write + commit in one step
-void write_bytes(SlickStreamBuffer& buf, const void* src, std::size_t n) {
+void write_bytes(stream_buffer& buf, const void* src, std::size_t n) {
     auto [ptr, sz] = buf.prepare(n);
     ASSERT_NE(ptr, nullptr);
     ASSERT_EQ(sz, n);
@@ -31,7 +36,7 @@ void write_bytes(SlickStreamBuffer& buf, const void* src, std::size_t n) {
 }
 
 // publish one message of n bytes filled with the given byte value
-void publish_filled(SlickStreamBuffer& buf, uint8_t value, std::size_t n) {
+void publish_filled(stream_buffer& buf, uint8_t value, std::size_t n) {
     auto [ptr, sz] = buf.prepare(n);
     ASSERT_NE(ptr, nullptr);
     std::memset(ptr, value, n);
@@ -42,7 +47,7 @@ void publish_filled(SlickStreamBuffer& buf, uint8_t value, std::size_t n) {
 }  // namespace
 
 TEST(StreamBufferTests, EmptyReadReturnsNull) {
-    SlickStreamBuffer buf(1024, 16);
+    stream_buffer buf(1024, 16);
     uint64_t cursor = 0;
     auto [ptr, len] = buf.read(cursor);
     EXPECT_EQ(ptr, nullptr);
@@ -56,14 +61,14 @@ TEST(StreamBufferTests, EmptyReadReturnsNull) {
 }
 
 TEST(StreamBufferTests, InvalidSizesThrow) {
-    EXPECT_THROW(SlickStreamBuffer(1000, 16), std::invalid_argument);   // capacity not pow2
-    EXPECT_THROW(SlickStreamBuffer(1024, 15), std::invalid_argument);   // control_size not pow2
-    EXPECT_THROW(SlickStreamBuffer(0, 16), std::invalid_argument);
-    EXPECT_THROW(SlickStreamBuffer(1024, 0), std::invalid_argument);
+    EXPECT_THROW(stream_buffer(1000, 16), std::invalid_argument);   // capacity not pow2
+    EXPECT_THROW(stream_buffer(1024, 15), std::invalid_argument);   // control_size not pow2
+    EXPECT_THROW(stream_buffer(0, 16), std::invalid_argument);
+    EXPECT_THROW(stream_buffer(1024, 0), std::invalid_argument);
 }
 
 TEST(StreamBufferTests, PrepareCommitConsumeReadRoundtrip) {
-    SlickStreamBuffer buf(1024, 16);
+    stream_buffer buf(1024, 16);
     write_bytes(buf, "hello", 5);
     EXPECT_EQ(buf.size(), 5u);
     EXPECT_EQ(std::memcmp(buf.data(), "hello", 5), 0);
@@ -91,7 +96,7 @@ TEST(StreamBufferTests, PrepareCommitConsumeReadRoundtrip) {
 }
 
 TEST(StreamBufferTests, ConsumeSplitsIntoRecords) {
-    SlickStreamBuffer buf(1024, 16);
+    stream_buffer buf(1024, 16);
     write_bytes(buf, "0123456789", 10);
     auto r1 = buf.consume(4);
     auto r2 = buf.consume(6);
@@ -114,7 +119,7 @@ TEST(StreamBufferTests, ConsumeSplitsIntoRecords) {
 }
 
 TEST(StreamBufferTests, PartialCommitKeepsRemainderPrepared) {
-    SlickStreamBuffer buf(1024, 16);
+    stream_buffer buf(1024, 16);
     auto [ptr, sz] = buf.prepare(8);
     ASSERT_EQ(sz, 8u);
     std::memcpy(ptr, "abcdefgh", 8);
@@ -126,7 +131,7 @@ TEST(StreamBufferTests, PartialCommitKeepsRemainderPrepared) {
 }
 
 TEST(StreamBufferTests, RePrepareWithoutCommit) {
-    SlickStreamBuffer buf(1024, 16);
+    stream_buffer buf(1024, 16);
     auto [p1, s1] = buf.prepare(8);
     (void)p1; (void)s1;
     EXPECT_EQ(buf.size(), 0u);
@@ -139,7 +144,7 @@ TEST(StreamBufferTests, RePrepareWithoutCommit) {
 }
 
 TEST(StreamBufferTests, PrepareZeroDoesNotDiscardPreparedBytes) {
-    SlickStreamBuffer buf(1024, 16);
+    stream_buffer buf(1024, 16);
     auto [ptr, sz] = buf.prepare(8);
     ASSERT_EQ(sz, 8u);
     std::memcpy(ptr, "abcdefgh", 8);
@@ -154,7 +159,7 @@ TEST(StreamBufferTests, PrepareZeroDoesNotDiscardPreparedBytes) {
 }
 
 TEST(StreamBufferTests, CommitMoreThanPreparedClamps) {
-    SlickStreamBuffer buf(1024, 16);
+    stream_buffer buf(1024, 16);
     auto [ptr, sz] = buf.prepare(8);
     std::memset(ptr, 'y', sz);
     buf.commit(100);
@@ -162,7 +167,7 @@ TEST(StreamBufferTests, CommitMoreThanPreparedClamps) {
 }
 
 TEST(StreamBufferTests, ConsumeMoreThanSizeClamps) {
-    SlickStreamBuffer buf(1024, 16);
+    stream_buffer buf(1024, 16);
     write_bytes(buf, "abcde", 5);
     auto record = buf.consume(100);  // clamps to 5, publishes one 5-byte record
     EXPECT_EQ(buf.size(), 0u);
@@ -175,7 +180,7 @@ TEST(StreamBufferTests, ConsumeMoreThanSizeClamps) {
 }
 
 TEST(StreamBufferTests, ConsumeZeroIsNoop) {
-    SlickStreamBuffer buf(1024, 16);
+    stream_buffer buf(1024, 16);
     write_bytes(buf, "abc", 3);
     auto record = buf.consume(0);
     EXPECT_FALSE(static_cast<bool>(record));  // nothing published
@@ -200,7 +205,7 @@ TEST(StreamBufferTests, ConsumeZeroIsNoop) {
 }
 
 TEST(StreamBufferTests, PrepareTooLargeThrowsLengthError) {
-    SlickStreamBuffer buf(64, 16);
+    stream_buffer buf(64, 16);
     // larger than the whole ring
     EXPECT_THROW(buf.prepare(65), std::length_error);
 
@@ -214,7 +219,7 @@ TEST(StreamBufferTests, PrepareTooLargeThrowsLengthError) {
 }
 
 TEST(StreamBufferTests, WrapRelocationPreservesUnconsumedBytes) {
-    SlickStreamBuffer buf(64, 16);
+    stream_buffer buf(64, 16);
 
     // fill 48 bytes 0..47, publish the first 40, keep 8 unconsumed
     uint8_t src[80];
@@ -250,7 +255,7 @@ TEST(StreamBufferTests, WrapRelocationPreservesUnconsumedBytes) {
 }
 
 TEST(StreamBufferTests, RecordsAcrossJumpReadInOrder) {
-    SlickStreamBuffer buf(64, 16);
+    stream_buffer buf(64, 16);
     uint64_t cursor = 0;
 
     publish_filled(buf, 'A', 40);   // record 0: ring [0, 40)
@@ -279,7 +284,7 @@ TEST(StreamBufferTests, RecordsAcrossJumpReadInOrder) {
 
 #if SLICK_STREAM_BUFFER_ENABLE_LOSS_DETECTION
 TEST(StreamBufferTests, ControlRingLappingDetectsLoss) {
-    SlickStreamBuffer buf(256, 4);  // tiny control ring
+    stream_buffer buf(256, 4);  // tiny control ring
 
     for (int i = 0; i < 8; ++i) {
         publish_filled(buf, static_cast<uint8_t>(i), 1);
@@ -302,7 +307,7 @@ TEST(StreamBufferTests, ControlRingLappingDetectsLoss) {
 }
 
 TEST(StreamBufferTests, DataRingLappingDetectsLoss) {
-    SlickStreamBuffer buf(64, 64);  // control ring never laps, data ring does
+    stream_buffer buf(64, 64);  // control ring never laps, data ring does
 
     for (int i = 0; i < 4; ++i) {
         publish_filled(buf, static_cast<uint8_t>(i), 32);  // records at offsets 0, 32, 64, 96
@@ -323,7 +328,7 @@ TEST(StreamBufferTests, DataRingLappingDetectsLoss) {
 #endif
 
 TEST(StreamBufferTests, ReadLastReturnsNewestRecord) {
-    SlickStreamBuffer buf(1024, 16);
+    stream_buffer buf(1024, 16);
     EXPECT_EQ(buf.read_last().first, nullptr);
 
     publish_filled(buf, 'a', 4);
@@ -336,7 +341,7 @@ TEST(StreamBufferTests, ReadLastReturnsNewestRecord) {
 }
 
 TEST(StreamBufferTests, LateJoinerInitialReadingIndex) {
-    SlickStreamBuffer buf(1024, 16);
+    stream_buffer buf(1024, 16);
     publish_filled(buf, 'a', 3);
     publish_filled(buf, 'b', 3);
     publish_filled(buf, 'c', 3);
@@ -356,7 +361,7 @@ TEST(StreamBufferTests, LateJoinerInitialReadingIndex) {
 TEST(StreamBufferTests, MultiConsumerBroadcast) {
     constexpr int kMessages = 500;
     constexpr int kConsumers = 3;
-    SlickStreamBuffer buf(1 << 16, 1024);  // sized so nothing laps
+    stream_buffer buf(1 << 16, 1024);  // sized so nothing laps
 
     std::vector<std::thread> consumers;
     std::vector<int> received(kConsumers, 0);
@@ -399,7 +404,7 @@ TEST(StreamBufferTests, MultiConsumerBroadcast) {
 }
 
 TEST(StreamBufferTests, DiscardInvalidatesPartialMessage) {
-    SlickStreamBuffer buf(1024, 16);
+    stream_buffer buf(1024, 16);
     uint64_t cursor = 0;
 
     // a complete message is published, then a partial message is committed
@@ -432,7 +437,7 @@ TEST(StreamBufferTests, DiscardInvalidatesPartialMessage) {
 }
 
 TEST(StreamBufferTests, DiscardKeepsOverwriteLossForLaggingConsumers) {
-    SlickStreamBuffer buf(64, 16);
+    stream_buffer buf(64, 16);
 
     publish_filled(buf, 'A', 40);
 
@@ -459,7 +464,7 @@ TEST(StreamBufferTests, DiscardKeepsOverwriteLossForLaggingConsumers) {
 }
 
 TEST(StreamBufferTests, DiscardDropsPreparedRegion) {
-    SlickStreamBuffer buf(1024, 16);
+    stream_buffer buf(1024, 16);
     auto [ptr, sz] = buf.prepare(8);
     std::memset(ptr, 'x', sz);
 
@@ -473,7 +478,7 @@ TEST(StreamBufferTests, DiscardDropsPreparedRegion) {
 }
 
 TEST(StreamBufferTests, DiscardThenRefillAcrossWrap) {
-    SlickStreamBuffer buf(64, 16);
+    stream_buffer buf(64, 16);
     uint64_t cursor = 0;
 
     publish_filled(buf, 'A', 40);
@@ -502,7 +507,7 @@ TEST(StreamBufferTests, DiscardThenRefillAcrossWrap) {
 }
 
 TEST(StreamBufferTests, DiscardOnEmptyBufferIsNoop) {
-    SlickStreamBuffer buf(1024, 16);
+    stream_buffer buf(1024, 16);
     buf.discard();
     EXPECT_EQ(buf.size(), 0u);
 
@@ -515,7 +520,7 @@ TEST(StreamBufferTests, DiscardOnEmptyBufferIsNoop) {
 }
 
 TEST(StreamBufferTests, Reset) {
-    SlickStreamBuffer buf(1024, 16);
+    stream_buffer buf(1024, 16);
     publish_filled(buf, 'a', 10);
     write_bytes(buf, "leftover", 8);
     ASSERT_EQ(buf.size(), 8u);

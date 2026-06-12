@@ -18,11 +18,11 @@
 #include <thread>
 #include <vector>
 
-using slick::SlickStreamBuffer;
+using slick::stream_buffer;
 
 namespace {
 
-void publish_message(SlickStreamBuffer& buf, const void* src, std::size_t n) {
+void publish_message(stream_buffer& buf, const void* src, std::size_t n) {
     auto [ptr, sz] = buf.prepare(n);
     ASSERT_NE(ptr, nullptr);
     std::memcpy(ptr, src, n);
@@ -33,8 +33,8 @@ void publish_message(SlickStreamBuffer& buf, const void* src, std::size_t n) {
 }  // namespace
 
 TEST(StreamBufferShmTests, CreatorOpenerRoundtrip) {
-    SlickStreamBuffer server(1024, 16, "ssb_roundtrip");
-    SlickStreamBuffer client("ssb_roundtrip");
+    stream_buffer server(1024, 16, "ssb_roundtrip");
+    stream_buffer client("ssb_roundtrip");
     EXPECT_TRUE(server.own_buffer());
     EXPECT_FALSE(client.own_buffer());
     EXPECT_TRUE(client.use_shm());
@@ -58,23 +58,23 @@ TEST(StreamBufferShmTests, CreatorOpenerRoundtrip) {
 }
 
 TEST(StreamBufferShmTests, OpenerReadsGeometry) {
-    SlickStreamBuffer server(2048, 32, "ssb_geometry");
-    SlickStreamBuffer client("ssb_geometry");
+    stream_buffer server(2048, 32, "ssb_geometry");
+    stream_buffer client("ssb_geometry");
     EXPECT_EQ(client.capacity(), 2048u);
     EXPECT_EQ(client.control_size(), 32u);
 }
 
 TEST(StreamBufferShmTests, GeometryMismatchThrows) {
-    SlickStreamBuffer server(1024, 16, "ssb_geometry_mismatch");
+    stream_buffer server(1024, 16, "ssb_geometry_mismatch");
     EXPECT_THROW({
         try {
-            SlickStreamBuffer(2048, 16, "ssb_geometry_mismatch");
+            stream_buffer(2048, 16, "ssb_geometry_mismatch");
         } catch (const std::runtime_error& e) {
             EXPECT_TRUE(std::string(e.what()).find("geometry mismatch") != std::string::npos);
             throw;
         }
     }, std::runtime_error);
-    EXPECT_THROW(SlickStreamBuffer(1024, 32, "ssb_geometry_mismatch"), std::runtime_error);
+    EXPECT_THROW(stream_buffer(1024, 32, "ssb_geometry_mismatch"), std::runtime_error);
 }
 
 TEST(StreamBufferShmTests, MagicMismatchThrows) {
@@ -88,7 +88,7 @@ TEST(StreamBufferShmTests, MagicMismatchThrows) {
 
     EXPECT_THROW({
         try {
-            SlickStreamBuffer client("ssb_bad_magic");
+            stream_buffer client("ssb_bad_magic");
         } catch (const std::runtime_error& e) {
             EXPECT_TRUE(std::string(e.what()).find("magic mismatch") != std::string::npos);
             throw;
@@ -101,11 +101,11 @@ TEST(StreamBufferShmTests, MagicMismatchThrows) {
 }
 
 TEST(StreamBufferShmTests, LateJoinerViaShm) {
-    SlickStreamBuffer server(1024, 16, "ssb_late_joiner");
+    stream_buffer server(1024, 16, "ssb_late_joiner");
     publish_message(server, "old1", 4);
     publish_message(server, "old2", 4);
 
-    SlickStreamBuffer client("ssb_late_joiner");
+    stream_buffer client("ssb_late_joiner");
     uint64_t cursor = client.initial_reading_index();
     EXPECT_EQ(cursor, 2u);
     EXPECT_EQ(client.read(cursor).first, nullptr);
@@ -119,8 +119,8 @@ TEST(StreamBufferShmTests, LateJoinerViaShm) {
 
 #if SLICK_STREAM_BUFFER_ENABLE_LOSS_DETECTION
 TEST(StreamBufferShmTests, LossyOverwriteSkipsOldData) {
-    SlickStreamBuffer server(1024, 4, "ssb_lossy");  // tiny control ring
-    SlickStreamBuffer client("ssb_lossy");
+    stream_buffer server(1024, 4, "ssb_lossy");  // tiny control ring
+    stream_buffer client("ssb_lossy");
 
     for (uint8_t i = 0; i < 8; ++i) {
         publish_message(server, &i, 1);
@@ -136,8 +136,8 @@ TEST(StreamBufferShmTests, LossyOverwriteSkipsOldData) {
 #endif
 
 TEST(StreamBufferShmTests, ReadLastViaShm) {
-    SlickStreamBuffer server(1024, 16, "ssb_read_last");
-    SlickStreamBuffer client("ssb_read_last");
+    stream_buffer server(1024, 16, "ssb_read_last");
+    stream_buffer client("ssb_read_last");
 
     publish_message(server, "first", 5);
     publish_message(server, "second", 6);
@@ -150,11 +150,11 @@ TEST(StreamBufferShmTests, ReadLastViaShm) {
 
 TEST(StreamBufferShmTests, BroadcastTwoOpeners) {
     constexpr int kMessages = 200;
-    SlickStreamBuffer server(1 << 16, 1024, "ssb_broadcast");
-    SlickStreamBuffer client1("ssb_broadcast");
-    SlickStreamBuffer client2("ssb_broadcast");
+    stream_buffer server(1 << 16, 1024, "ssb_broadcast");
+    stream_buffer client1("ssb_broadcast");
+    stream_buffer client2("ssb_broadcast");
 
-    auto consume_all = [&](SlickStreamBuffer& client, std::vector<uint64_t>& out) {
+    auto consume_all = [&](stream_buffer& client, std::vector<uint64_t>& out) {
         uint64_t cursor = 0;
         while (out.size() < kMessages) {
             auto [ptr, len] = client.read(cursor);

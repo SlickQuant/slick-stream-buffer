@@ -82,7 +82,7 @@ target_link_libraries(your_target PRIVATE slick::stream_buffer)
 #include <slick/stream_buffer.h>
 
 // 64 MB data ring, 64K message records; named -> shared memory, nullptr -> local
-slick::SlickStreamBuffer stream(1ull << 26, 1u << 16, "market_data");
+slick::stream_buffer stream(1ull << 26, 1u << 16, "market_data");
 
 for (;;) {
     auto [ptr, size] = stream.prepare(64 * 1024);
@@ -99,9 +99,9 @@ for (;;) {
 ### Consumers: independent cursors, zero-copy reads
 
 ```cpp
-// same process: share the SlickStreamBuffer instance with the producer
+// same process: share the slick::stream_buffer instance with the producer
 // another process:
-slick::SlickStreamBuffer stream("market_data");
+slick::stream_buffer stream("market_data");
 
 uint64_t cursor = stream.initial_reading_index();   // or 0 to replay history
 for (;;) {
@@ -116,7 +116,7 @@ for (;;) {
 ```cpp
 #include <slick/stream_buffer.h>
 
-slick::SlickStreamBuffer buf(1024, 16);     // capacity bytes, record count (both pow2)
+slick::stream_buffer buf(1024, 16);         // capacity bytes, record count (both pow2)
 
 auto [ptr, sz] = buf.prepare(5);
 std::memcpy(ptr, "hello", 5);
@@ -129,12 +129,16 @@ auto [data, length] = buf.read(cursor);      // -> "hello", 5
 
 ## API Overview
 
+The class is `slick::SlickStreamBuffer`; `slick::stream_buffer` is a type alias for it
+and the preferred spelling, matching the `slick::stream_buffer` CMake target. Both name
+the same type.
+
 ### Constructors
 
 ```cpp
-SlickStreamBuffer(uint64_t capacity, uint32_t control_size);                       // local memory
-SlickStreamBuffer(uint64_t capacity, uint32_t control_size, const char* shm_name); // shm creator
-SlickStreamBuffer(const char* shm_name);                                           // shm opener
+stream_buffer(uint64_t capacity, uint32_t control_size);                       // local memory
+stream_buffer(uint64_t capacity, uint32_t control_size, const char* shm_name); // shm creator
+stream_buffer(const char* shm_name);                                           // shm opener
 ```
 
 `capacity` is the data ring size in bytes; `control_size` is the number of message

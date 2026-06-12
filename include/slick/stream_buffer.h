@@ -67,9 +67,9 @@ namespace slick {
  *
  * The producer side exposes a beast::flat_buffer-like interface (prepare/commit/consume/data/size)
  * so that network bytes can be written directly into the ring (e.g. by boost::asio/boost::beast via
- * the dynamic_stream_buffer adapter). consume(n) does not discard bytes - it PUBLISHES them to
- * consumers as one discrete message record. Each consumer owns a monotonic cursor and reads whole
- * messages zero-copy as (pointer, length) pairs.
+ * the slick::dynamic_buffer adapter from the slick-dynamic-buffer repo). consume(n) does not
+ * discard bytes - it PUBLISHES them to consumers as one discrete message record. Each consumer
+ * owns a monotonic cursor and reads whole messages zero-copy as (pointer, length) pairs.
  *
  * Caveats:
  * - Producer methods (prepare/commit/consume/data/size/reset) must be called from a single thread.
@@ -695,5 +695,10 @@ private:
         }
     }
 };
+
+/// Preferred snake_case spelling of SlickStreamBuffer, matching the slick::stream_buffer
+/// CMake target and the Boost-style naming of companion types such as slick::dynamic_buffer.
+/// SlickStreamBuffer remains available for backward compatibility.
+using stream_buffer = SlickStreamBuffer;
 
 }

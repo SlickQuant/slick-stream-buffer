@@ -2,6 +2,10 @@
 
 ## v1.0.4 - 2026-06-12
 - Separatad slick/dynamic_stream_buffer.h into slick-dynamic-buffer repo due to vcpk dependencies issue
+- Added `slick::stream_buffer` as the preferred snake_case spelling of
+  `slick::SlickStreamBuffer`, matching the `slick::stream_buffer` CMake target and the
+  Boost-style naming of the `slick::dynamic_buffer` adapter. `SlickStreamBuffer`
+  remains available for backward compatibility.
 
 ## v1.0.3 - 2026-06-11
 - `slick/dynamic_stream_buffer.h` is now installed only when Boost is found at
