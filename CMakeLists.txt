@@ -21,7 +21,7 @@ if (NOT slick-shm_FOUND)
     FetchContent_Declare(
         slick-shm
         GIT_REPOSITORY https://github.com/SlickQuant/slick-shm.git
-        GIT_TAG v0.1.4
+        GIT_TAG v0.1.4 # See https://github.com/SlickQuant/slick-shm/releases for latest version
     )
     FetchContent_MakeAvailable(slick-shm)
 else()
