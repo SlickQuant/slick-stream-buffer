@@ -47,6 +47,10 @@ if(BUILD_SLICK_STREAM_BUFFER_TESTS)
     add_subdirectory(tests)
 endif()
 
+# Installation rules
+include(GNUInstallDirs)
+install(DIRECTORY include/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+
 # Generate and install CMake config files for vcpkg compatibility
 include(CMakePackageConfigHelpers)
 
