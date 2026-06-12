@@ -1,5 +1,8 @@
 # Changelog
 
+## v1.0.4 - 2026-06-12
+- Separatad slick/dynamic_stream_buffer.h into slick-dynamic-buffer repo due to vcpk dependencies issue
+
 ## v1.0.3 - 2026-06-11
 - `slick/dynamic_stream_buffer.h` is now installed only when Boost is found at
   configure time, and the header emits a clear `#error` when included without
