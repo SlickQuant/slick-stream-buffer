@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.0.3 - 2026-06-11
+- `slick/dynamic_stream_buffer.h` is now installed only when Boost is found at
+  configure time, and the header emits a clear `#error` when included without
+  Boost.Asio on the include path. The core `slick/stream_buffer.h` remains
+  Boost-free.
+
 ## v1.0.2 - 2026-06-11
 - Added `SlickStreamBuffer::discard()` to drop committed-but-unconsumed bytes (and any
   prepared region) without publishing them — for invalidating a partial message after a

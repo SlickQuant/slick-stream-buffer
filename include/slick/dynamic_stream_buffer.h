@@ -13,6 +13,10 @@
 
 #include <slick/stream_buffer.h>
 
+#if !__has_include(<boost/asio/buffer.hpp>)
+#error "slick/dynamic_stream_buffer.h requires Boost.Asio; add Boost to the include path or use slick/stream_buffer.h only"
+#endif
+
 #include <boost/asio/buffer.hpp>
 
 #include <cstddef>
