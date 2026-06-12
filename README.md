@@ -7,17 +7,19 @@
 
 SlickStreamBuffer is a header-only C++ library that provides a lock-free,
 single-producer multi-consumer (SPMC) byte stream buffer built on a ring buffer.
-It is designed as a **drop-in replacement for `boost::beast::flat_buffer`**:
-network bytes received by boost::asio / boost::beast are written directly into
-the ring, and publishing a complete message to consumer threads — or other
-processes via shared memory — requires **zero copies**.
+Incoming bytes (e.g. from a network socket) are written directly into the ring,
+and publishing a complete message to consumer threads — or other processes via
+shared memory — requires **zero copies**.
+
+A Boost.Asio `DynamicBuffer` adapter over this buffer is available separately:
+[slick-dynamic-buffer](https://github.com/SlickQuant/slick-dynamic-buffer).
 
 ## How it works
 
 The producer side exposes the familiar dynamic-buffer interface
 (`prepare` / `commit` / `consume` / `data` / `size`), with one twist:
 
-- `prepare(n)` returns a contiguous writable region — asio writes received bytes there
+- `prepare(n)` returns a contiguous writable region — received bytes are written there
 - `commit(n)` moves bytes into the readable area — the app parses them in place
 - `consume(n)` does **not** discard bytes: it **publishes** them to consumers as
   **one discrete message record**
@@ -27,7 +29,7 @@ zero-copy as `(pointer, length)` pairs — the broadcast pattern of
 [SlickQueue](https://github.com/SlickQuant/slick-queue), applied to a byte stream.
 
 ```
- network ──asio──▶ prepare/commit ──▶ [ data ring ] ──consume(n)──▶ record {offset, len}
+ network ────────▶ prepare/commit ──▶ [ data ring ] ──consume(n)──▶ record {offset, len}
                                                                         │
                                               consumer A (own cursor) ◀─┤  zero-copy reads
                                               consumer B (own cursor) ◀─┤  (threads or
@@ -38,9 +40,7 @@ zero-copy as `(pointer, length)` pairs — the broadcast pattern of
 
 - **Lock-free** single-producer / multi-consumer broadcast
 - **Zero-copy fan-out** of received network data to threads and processes
-- **Boost.Asio DynamicBuffer adapter** (`slick::dynamic_stream_buffer`) usable with
-  boost::beast / boost::asio read operations
-- **Header-only**; the core has **no Boost dependency**
+- **Header-only**
 - **Shared memory support** for inter-process communication
 - **Cross-platform** — Windows, Linux, macOS
 - Modern **C++20**
@@ -49,15 +49,13 @@ zero-copy as `(pointer, length)` pairs — the broadcast pattern of
 
 - C++20 compatible compiler
 - [slick-shm](https://github.com/SlickQuant/slick-shm) (fetched automatically when not installed)
-- Boost.Asio — **only** if you use the `dynamic_stream_buffer` adapter header
 
 ## Installation
 
 Header-only. Add the `include` directory to your include path:
 
 ```cpp
-#include <slick/stream_buffer.h>          // core SPMC byte queue (no Boost)
-#include <slick/dynamic_stream_buffer.h>  // asio DynamicBuffer adapter (requires Boost.Asio)
+#include <slick/stream_buffer.h>
 ```
 
 ### Using CMake FetchContent
@@ -69,7 +67,7 @@ set(BUILD_SLICK_STREAM_BUFFER_TESTS OFF CACHE BOOL "" FORCE)
 FetchContent_Declare(
     slick-stream-buffer
     GIT_REPOSITORY https://github.com/SlickQuant/slick-stream-buffer.git
-    GIT_TAG v1.0.0
+    GIT_TAG v1.0.0 # See https://github.com/SlickQuant/slick-stream-buffer/releases for latest version
 )
 FetchContent_MakeAvailable(slick-stream-buffer)
 
@@ -78,35 +76,30 @@ target_link_libraries(your_target PRIVATE slick::stream_buffer)
 
 ## Usage
 
-### Producer: receive with boost::asio, publish on message boundaries
+### Producer: receive bytes, publish on message boundaries
 
 ```cpp
-#include <slick/dynamic_stream_buffer.h>
+#include <slick/stream_buffer.h>
 
 // 64 MB data ring, 64K message records; named -> shared memory, nullptr -> local
 slick::SlickStreamBuffer stream(1ull << 26, 1u << 16, "market_data");
-slick::dynamic_stream_buffer buffer(stream);   // cheap copyable handle
 
 for (;;) {
-    std::size_t n = socket.read_some(buffer.prepare(64 * 1024));
-    buffer.commit(n);
+    auto [ptr, size] = stream.prepare(64 * 1024);
+    std::size_t n = receive_bytes(ptr, size);   // e.g. read from a socket
+    stream.commit(n);
 
     // parse the readable area; publish every complete package
-    while (std::size_t package_size = find_complete_package(buffer.data())) {
-        buffer.consume(package_size);   // publishes one record - no copy
+    while (std::size_t package_size = find_complete_package(stream.data(), stream.size())) {
+        stream.consume(package_size);   // publishes one record - no copy
     }
 }
 ```
 
-The adapter satisfies asio's `DynamicBuffer_v1` requirements, so it also works with
-composed operations such as `boost::asio::read(socket, buffer, ...)`,
-`boost::beast::http::read(...)` and `websocket::stream::read(...)`.
-
 ### Consumers: independent cursors, zero-copy reads
 
 ```cpp
-// same process:
-slick::SlickStreamBuffer& stream = buffer.stream_buffer();
+// same process: share the SlickStreamBuffer instance with the producer
 // another process:
 slick::SlickStreamBuffer stream("market_data");
 
@@ -118,7 +111,7 @@ for (;;) {
 }
 ```
 
-### Core API without Boost
+### Minimal end-to-end example
 
 ```cpp
 #include <slick/stream_buffer.h>
@@ -157,8 +150,7 @@ number of messages (not bytes) a slow consumer may lag behind.
   (`{sequence, data, length}`, evaluates to `false` if nothing was published)
 - `void discard()` — drop the readable bytes and any prepared region **without publishing**;
   this starts the next connection cleanly but older published records still follow the
-  normal lossy overwrite semantics (exposed as `clear()` on the adapter, matching
-  `beast::flat_buffer`)
+  normal lossy overwrite semantics
 - `const uint8_t* data()` / `size_t size()` — the readable (committed, unconsumed) region
 
 ### Consumer methods
@@ -181,20 +173,20 @@ loss is counted. Size the rings so this cannot happen in normal operation; defin
 
 **Pointer invalidation.** `prepare()` may relocate the readable region to keep it
 contiguous when the ring wraps; pointers previously returned by `data()`/`prepare()`
-are invalidated — the same rule as `flat_buffer` reallocation. Message pointers
-returned by `read()` stay valid until the producer laps that part of the ring.
+are invalidated. Message pointers returned by `read()` stay valid until the producer
+laps that part of the ring.
 
 **Record granularity.** Every `consume(n)` call produces exactly one consumer-visible
-record. If a protocol layer consumes incrementally (e.g. the beast HTTP parser),
-records correspond to those increments; call `consume()` yourself on package
-boundaries when you need strict framing.
+record. If a protocol layer consumes incrementally, records correspond to those
+increments; call `consume()` yourself on package boundaries when you need strict
+framing.
 
 **Disconnects mid-message.** If the connection drops after a partial message was
 committed, the leftover readable bytes are invalid for the next connection. Call
-`discard()` (or `clear()` on the adapter) before reconnecting so the partial bytes
-are not prepended to the new connection's data. `discard()` does not publish a
-record, but slow consumers can still lose older published records if the producer
-already wrapped a prepared region over those ring bytes.
+`discard()` before reconnecting so the partial bytes are not prepended to the new
+connection's data. `discard()` does not publish a record, but slow consumers can
+still lose older published records if the producer already wrapped a prepared
+region over those ring bytes.
 
 **Message size** is limited to < 4 GiB per record.
 
@@ -214,9 +206,6 @@ cmake -S . -B build
 cmake --build build --config Debug
 ctest --test-dir build -C Debug --output-on-failure
 ```
-
-The Boost.Asio adapter tests build only when Boost is found (e.g. configure with a
-vcpkg toolchain file); they are skipped gracefully otherwise.
 
 ## License
 
