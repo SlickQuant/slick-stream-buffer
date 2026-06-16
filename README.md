@@ -58,6 +58,19 @@ Header-only. Add the `include` directory to your include path:
 #include <slick/stream_buffer.h>
 ```
 
+### Using vcpkg
+
+```bash
+vcpkg install slick-stream-buffer
+```
+
+Then in your `CMakeLists.txt`:
+
+```cmake
+find_package(slick-stream-buffer CONFIG REQUIRED)
+target_link_libraries(your_target PRIVATE slick::stream_buffer)
+```
+
 ### Using CMake FetchContent
 
 ```cmake
