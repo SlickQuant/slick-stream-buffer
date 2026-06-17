@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.0.5 - 2026-06-16
+- Renamed canonical header from `slick/stream_buffer.h` to `slick/stream_buffer.hpp`.
+  The old `.h` path is kept as a backward-compatibility shim that re-exports the new
+  header and emits a compiler warning directing users to update their includes.
+
 ## v1.0.4 - 2026-06-12
 - Separatad slick/dynamic_stream_buffer.h into slick-dynamic-buffer repo due to vcpk dependencies issue
 - Added `slick::stream_buffer` as the preferred snake_case spelling of

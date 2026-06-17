@@ -10,7 +10,7 @@
  ********************************************************************************/
 
 #include <gtest/gtest.h>
-#include <slick/stream_buffer.h>
+#include <slick/stream_buffer.hpp>
 
 #include <atomic>
 #include <cstring>

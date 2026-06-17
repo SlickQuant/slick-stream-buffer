@@ -55,7 +55,7 @@ zero-copy as `(pointer, length)` pairs — the broadcast pattern of
 Header-only. Add the `include` directory to your include path:
 
 ```cpp
-#include <slick/stream_buffer.h>
+#include <slick/stream_buffer.hpp>
 ```
 
 ### Using vcpkg
@@ -92,7 +92,7 @@ target_link_libraries(your_target PRIVATE slick::stream_buffer)
 ### Producer: receive bytes, publish on message boundaries
 
 ```cpp
-#include <slick/stream_buffer.h>
+#include <slick/stream_buffer.hpp>
 
 // 64 MB data ring, 64K message records; named -> shared memory, nullptr -> local
 slick::stream_buffer stream(1ull << 26, 1u << 16, "market_data");
@@ -127,7 +127,7 @@ for (;;) {
 ### Minimal end-to-end example
 
 ```cpp
-#include <slick/stream_buffer.h>
+#include <slick/stream_buffer.hpp>
 
 slick::stream_buffer buf(1024, 16);         // capacity bytes, record count (both pow2)
 
