@@ -22,8 +22,7 @@ endif()
 
 target_link_libraries(slick-stream-buffer-tests PRIVATE slick::stream_buffer GTest::gtest_main)
 
-# Enable loss detection in tests
-target_compile_definitions(slick-stream-buffer-tests PRIVATE SLICK_STREAM_BUFFER_ENABLE_LOSS_DETECTION=1)
+
 
 include(GoogleTest)
 gtest_discover_tests(slick-stream-buffer-tests)

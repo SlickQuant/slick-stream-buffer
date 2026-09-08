@@ -13,12 +13,19 @@
 #include <slick/stream_buffer.hpp>
 
 #include <atomic>
+#include <cstdint>
 #include <cstring>
+#include <memory>
 #include <thread>
 #include <type_traits>
 #include <vector>
 
 using slick::stream_buffer;
+
+// Loss counting is opt-in, and these tests assert on loss_count(), so they read through traits
+// that turn it on. Reset resynchronization is on by default - DefaultReadTraitsAreSilent covers
+// what the defaults do and do not do.
+namespace { struct dbg : slick::read_traits { static constexpr bool count_loss = true; }; }
 
 // SlickStreamBuffer is the compatibility spelling - it must keep naming the same type
 static_assert(std::is_same_v<slick::stream_buffer, slick::SlickStreamBuffer>,
@@ -49,7 +56,7 @@ void publish_filled(stream_buffer& buf, uint8_t value, std::size_t n) {
 TEST(StreamBufferTests, EmptyReadReturnsNull) {
     stream_buffer buf(1024, 16);
     uint64_t cursor = 0;
-    auto [ptr, len] = buf.read(cursor);
+    auto [ptr, len] = buf.read<dbg>(cursor);
     EXPECT_EQ(ptr, nullptr);
     EXPECT_EQ(len, 0u);
     EXPECT_EQ(cursor, 0u);
@@ -83,14 +90,14 @@ TEST(StreamBufferTests, PrepareCommitConsumeReadRoundtrip) {
     EXPECT_EQ(std::memcmp(record.data, "hello", 5), 0);
 
     uint64_t cursor = 0;
-    auto [ptr, len] = buf.read(cursor);
+    auto [ptr, len] = buf.read<dbg>(cursor);
     ASSERT_NE(ptr, nullptr);
     EXPECT_EQ(len, 5u);
     EXPECT_EQ(std::memcmp(ptr, "hello", 5), 0);
     EXPECT_EQ(cursor, 1u);
     EXPECT_EQ(ptr, record.data);  // identical view, zero-copy
 
-    auto [ptr2, len2] = buf.read(cursor);
+    auto [ptr2, len2] = buf.read<dbg>(cursor);
     EXPECT_EQ(ptr2, nullptr);
     EXPECT_EQ(len2, 0u);
 }
@@ -107,12 +114,12 @@ TEST(StreamBufferTests, ConsumeSplitsIntoRecords) {
     EXPECT_EQ(r2.length, 6u);
 
     uint64_t cursor = 0;
-    auto [p1, l1] = buf.read(cursor);
+    auto [p1, l1] = buf.read<dbg>(cursor);
     ASSERT_NE(p1, nullptr);
     EXPECT_EQ(l1, 4u);
     EXPECT_EQ(std::memcmp(p1, "0123", 4), 0);
 
-    auto [p2, l2] = buf.read(cursor);
+    auto [p2, l2] = buf.read<dbg>(cursor);
     ASSERT_NE(p2, nullptr);
     EXPECT_EQ(l2, 6u);
     EXPECT_EQ(std::memcmp(p2, "456789", 6), 0);
@@ -174,7 +181,7 @@ TEST(StreamBufferTests, ConsumeMoreThanSizeClamps) {
     EXPECT_EQ(record.length, 5u);
 
     uint64_t cursor = 0;
-    auto [ptr, len] = buf.read(cursor);
+    auto [ptr, len] = buf.read<dbg>(cursor);
     ASSERT_NE(ptr, nullptr);
     EXPECT_EQ(len, 5u);
 }
@@ -189,17 +196,17 @@ TEST(StreamBufferTests, ConsumeZeroIsNoop) {
     EXPECT_EQ(buf.size(), 3u);
 
     uint64_t cursor = 0;
-    auto [ptr, len] = buf.read(cursor);
+    auto [ptr, len] = buf.read<dbg>(cursor);
     EXPECT_EQ(ptr, nullptr);
     EXPECT_EQ(len, 0u);
 
     // empty buffer: consume(0) publishes nothing either
     buf.consume(3);
     buf.consume(0);
-    auto [p1, l1] = buf.read(cursor);
+    auto [p1, l1] = buf.read<dbg>(cursor);
     EXPECT_NE(p1, nullptr);
     EXPECT_EQ(l1, 3u);
-    auto [p2, l2] = buf.read(cursor);
+    auto [p2, l2] = buf.read<dbg>(cursor);
     EXPECT_EQ(p2, nullptr);
     EXPECT_EQ(l2, 0u);
 }
@@ -229,7 +236,7 @@ TEST(StreamBufferTests, WrapRelocationPreservesUnconsumedBytes) {
 
     // read the published record before its bytes get overwritten
     uint64_t cursor = 0;
-    auto [p0, l0] = buf.read(cursor);
+    auto [p0, l0] = buf.read<dbg>(cursor);
     ASSERT_NE(p0, nullptr);
     ASSERT_EQ(l0, 40u);
     EXPECT_EQ(std::memcmp(p0, src, 40), 0);
@@ -247,7 +254,7 @@ TEST(StreamBufferTests, WrapRelocationPreservesUnconsumedBytes) {
 
     // publish the relocated region as one record and read it back
     buf.consume(40);
-    auto [p2, l2] = buf.read(cursor);
+    auto [p2, l2] = buf.read<dbg>(cursor);
     ASSERT_NE(p2, nullptr);
     ASSERT_EQ(l2, 40u);
     EXPECT_EQ(std::memcmp(p2, src + 40, 40), 0);
@@ -261,19 +268,19 @@ TEST(StreamBufferTests, RecordsAcrossJumpReadInOrder) {
     publish_filled(buf, 'A', 40);   // record 0: ring [0, 40)
 
     // consume record 0 before its ring bytes can be reused
-    auto [p0, l0] = buf.read(cursor);
+    auto [p0, l0] = buf.read<dbg>(cursor);
     ASSERT_NE(p0, nullptr);
     ASSERT_EQ(l0, 40u);
 
     publish_filled(buf, 'B', 16);   // record 1: ring [40, 56)
     publish_filled(buf, 'C', 16);   // forces jump (pos 56 + 16 > 64); record 2: ring [0, 16)
 
-    auto [p1, l1] = buf.read(cursor);
+    auto [p1, l1] = buf.read<dbg>(cursor);
     ASSERT_NE(p1, nullptr);
     ASSERT_EQ(l1, 16u);
     for (uint32_t i = 0; i < l1; ++i) EXPECT_EQ(p1[i], 'B');
 
-    auto [p2, l2] = buf.read(cursor);
+    auto [p2, l2] = buf.read<dbg>(cursor);
     ASSERT_NE(p2, nullptr);
     ASSERT_EQ(l2, 16u);
     for (uint32_t i = 0; i < l2; ++i) EXPECT_EQ(p2[i], 'C');
@@ -282,7 +289,6 @@ TEST(StreamBufferTests, RecordsAcrossJumpReadInOrder) {
     EXPECT_EQ(cursor, 3u);
 }
 
-#if SLICK_STREAM_BUFFER_ENABLE_LOSS_DETECTION
 TEST(StreamBufferTests, ControlRingLappingDetectsLoss) {
     stream_buffer buf(256, 4);  // tiny control ring
 
@@ -292,7 +298,7 @@ TEST(StreamBufferTests, ControlRingLappingDetectsLoss) {
 
     // slots now hold records 4..7; a cursor at 0 must skip to 4 and count the loss
     uint64_t cursor = 0;
-    auto [ptr, len] = buf.read(cursor);
+    auto [ptr, len] = buf.read<dbg>(cursor);
     ASSERT_NE(ptr, nullptr);
     EXPECT_EQ(len, 1u);
     EXPECT_EQ(ptr[0], 4);
@@ -300,7 +306,7 @@ TEST(StreamBufferTests, ControlRingLappingDetectsLoss) {
     EXPECT_EQ(cursor, 5u);
 
     for (int i = 5; i < 8; ++i) {
-        auto [p, l] = buf.read(cursor);
+        auto [p, l] = buf.read<dbg>(cursor);
         ASSERT_NE(p, nullptr);
         EXPECT_EQ(p[0], i);
     }
@@ -315,17 +321,16 @@ TEST(StreamBufferTests, DataRingLappingDetectsLoss) {
 
     // record 0 and 1 bytes were overwritten by records 2 and 3; the validity check must skip them
     uint64_t cursor = 0;
-    auto [ptr, len] = buf.read(cursor);
+    auto [ptr, len] = buf.read<dbg>(cursor);
     ASSERT_NE(ptr, nullptr);
     EXPECT_EQ(len, 32u);
     EXPECT_EQ(ptr[0], 2);
     EXPECT_EQ(buf.loss_count(), 2u);
 
-    auto [p3, l3] = buf.read(cursor);
+    auto [p3, l3] = buf.read<dbg>(cursor);
     ASSERT_NE(p3, nullptr);
     EXPECT_EQ(p3[0], 3);
 }
-#endif
 
 TEST(StreamBufferTests, ReadLastReturnsNewestRecord) {
     stream_buffer buf(1024, 16);
@@ -348,14 +353,14 @@ TEST(StreamBufferTests, LateJoinerInitialReadingIndex) {
 
     uint64_t cursor = buf.initial_reading_index();
     EXPECT_EQ(cursor, 3u);
-    EXPECT_EQ(buf.read(cursor).first, nullptr);  // nothing new yet
+    EXPECT_EQ(buf.read<dbg>(cursor).first, nullptr);  // nothing new yet
 
     publish_filled(buf, 'd', 5);
-    auto [ptr, len] = buf.read(cursor);
+    auto [ptr, len] = buf.read<dbg>(cursor);
     ASSERT_NE(ptr, nullptr);
     EXPECT_EQ(len, 5u);
     EXPECT_EQ(ptr[0], 'd');
-    EXPECT_EQ(buf.read(cursor).first, nullptr);
+    EXPECT_EQ(buf.read<dbg>(cursor).first, nullptr);
 }
 
 TEST(StreamBufferTests, MultiConsumerBroadcast) {
@@ -372,7 +377,7 @@ TEST(StreamBufferTests, MultiConsumerBroadcast) {
             uint64_t cursor = 0;
             uint64_t expected = 0;
             while (received[c] < kMessages) {
-                auto [ptr, len] = buf.read(cursor);
+                auto [ptr, len] = buf.read<dbg>(cursor);
                 if (ptr == nullptr) {
                     std::this_thread::yield();
                     continue;
@@ -419,7 +424,7 @@ TEST(StreamBufferTests, DiscardInvalidatesPartialMessage) {
 
     // the published record is still readable because the discarded bytes did not
     // wrap over it
-    auto [p0, l0] = buf.read(cursor);
+    auto [p0, l0] = buf.read<dbg>(cursor);
     ASSERT_NE(p0, nullptr);
     ASSERT_EQ(l0, 8u);
     EXPECT_EQ(std::memcmp(p0, "complete", 8), 0);
@@ -429,7 +434,7 @@ TEST(StreamBufferTests, DiscardInvalidatesPartialMessage) {
     EXPECT_EQ(buf.size(), 5u);
     EXPECT_EQ(std::memcmp(buf.data(), "fresh", 5), 0);
     buf.consume(5);
-    auto [p1, l1] = buf.read(cursor);
+    auto [p1, l1] = buf.read<dbg>(cursor);
     ASSERT_NE(p1, nullptr);
     ASSERT_EQ(l1, 5u);
     EXPECT_EQ(std::memcmp(p1, "fresh", 5), 0);
@@ -449,7 +454,7 @@ TEST(StreamBufferTests, DiscardKeepsOverwriteLossForLaggingConsumers) {
     buf.discard();
 
     uint64_t cursor = 0;
-    auto [p0, l0] = buf.read(cursor);
+    auto [p0, l0] = buf.read<dbg>(cursor);
     EXPECT_EQ(p0, nullptr);
     EXPECT_EQ(l0, 0u);
     EXPECT_EQ(cursor, 1u);
@@ -457,7 +462,7 @@ TEST(StreamBufferTests, DiscardKeepsOverwriteLossForLaggingConsumers) {
 
     write_bytes(buf, "ok", 2);
     buf.consume(2);
-    auto [p1, l1] = buf.read(cursor);
+    auto [p1, l1] = buf.read<dbg>(cursor);
     ASSERT_NE(p1, nullptr);
     ASSERT_EQ(l1, 2u);
     EXPECT_EQ(std::memcmp(p1, "ok", 2), 0);
@@ -482,7 +487,7 @@ TEST(StreamBufferTests, DiscardThenRefillAcrossWrap) {
     uint64_t cursor = 0;
 
     publish_filled(buf, 'A', 40);
-    auto [p0, l0] = buf.read(cursor);
+    auto [p0, l0] = buf.read<dbg>(cursor);
     ASSERT_NE(p0, nullptr);
     ASSERT_EQ(l0, 40u);
 
@@ -498,7 +503,7 @@ TEST(StreamBufferTests, DiscardThenRefillAcrossWrap) {
     // refill across the wrap and read every record back intact
     for (int i = 0; i < 4; ++i) {
         publish_filled(buf, static_cast<uint8_t>(i), 16);
-        auto [p, l] = buf.read(cursor);
+        auto [p, l] = buf.read<dbg>(cursor);
         ASSERT_NE(p, nullptr);
         ASSERT_EQ(l, 16u);
         for (uint32_t j = 0; j < l; ++j) EXPECT_EQ(p[j], i);
@@ -514,7 +519,7 @@ TEST(StreamBufferTests, DiscardOnEmptyBufferIsNoop) {
     publish_filled(buf, 'a', 3);
     buf.discard();  // nothing unconsumed - published record stays readable
     uint64_t cursor = 0;
-    auto [ptr, len] = buf.read(cursor);
+    auto [ptr, len] = buf.read<dbg>(cursor);
     ASSERT_NE(ptr, nullptr);
     EXPECT_EQ(len, 3u);
 }
@@ -532,11 +537,98 @@ TEST(StreamBufferTests, Reset) {
     EXPECT_EQ(buf.read_last().first, nullptr);
 
     uint64_t cursor = 0;
-    EXPECT_EQ(buf.read(cursor).first, nullptr);
+    EXPECT_EQ(buf.read<dbg>(cursor).first, nullptr);
 
     publish_filled(buf, 'z', 6);
-    auto [ptr, len] = buf.read(cursor);
+    auto [ptr, len] = buf.read<dbg>(cursor);
     ASSERT_NE(ptr, nullptr);
     EXPECT_EQ(len, 6u);
     EXPECT_EQ(ptr[0], 'z');
+}
+
+// True where a 4 GiB ring can exist at all. Deliberately sizeof-based rather than
+// `#if SIZE_MAX < UINT64_MAX`: an undefined macro is silently 0 in a preprocessor condition, so
+// a missing <cstdint> would quietly compile the wrong test out on every platform. The skips are
+// plain early returns rather than `if constexpr`, which would leave EXPECT_THROW sitting in a
+// discarded branch and warn about its unreferenced labels.
+constexpr bool kSizeTHoldsFourGiB = sizeof(std::size_t) >= sizeof(uint64_t);
+
+// record::length is 32 bits, so a message of 4 GiB or more cannot be published. The limit used to
+// be a Debug-only assert: in Release the length was cast to uint32_t, publishing a truncated
+// length and handing consumers a short read of a long message.
+TEST(StreamBufferTests, ConsumeBeyondFourGiBThrowsInsteadOfTruncating) {
+    if (!kSizeTHoldsFourGiB) {
+        // The constructor rejects this geometry outright there - see the test below.
+        GTEST_SKIP() << "a 4 GiB ring cannot be addressed on a 32-bit build";
+    }
+    constexpr uint64_t kCapacity = 1ull << 32;  // 4 GiB ring - pages stay untouched below
+    constexpr uint64_t kMaxRecord = 0xFFFFFFFFull;
+
+    std::unique_ptr<stream_buffer> buf;
+    try {
+        buf = std::make_unique<stream_buffer>(kCapacity, 16);
+    } catch (const std::bad_alloc&) {
+        GTEST_SKIP() << "not enough memory for a 4 GiB ring";
+    }
+
+    auto [ptr, sz] = buf->prepare(kCapacity);
+    ASSERT_NE(ptr, nullptr);
+    EXPECT_EQ(sz, kCapacity);
+    buf->commit(kCapacity);
+    ASSERT_EQ(buf->size(), kCapacity);
+
+    EXPECT_THROW(buf->consume(kCapacity), std::length_error);
+
+    // Nothing was published and no state moved, so the bytes are still there to publish in
+    // pieces that do fit.
+    EXPECT_EQ(buf->size(), kCapacity);
+    uint64_t cursor = 0;
+    EXPECT_EQ(buf->read<dbg>(cursor).first, nullptr);
+
+    const auto rec = buf->consume(kMaxRecord);  // the largest record that fits, exactly
+    ASSERT_TRUE(rec);
+    EXPECT_EQ(rec.length, kMaxRecord);
+    EXPECT_EQ(buf->size(), kCapacity - kMaxRecord);
+
+    auto [rptr, rlen] = buf->read<dbg>(cursor);
+    ASSERT_NE(rptr, nullptr);
+    EXPECT_EQ(rlen, kMaxRecord);
+}
+
+// A geometry whose total does not fit in a size_t must be rejected, not truncated: the old
+// computation wrapped in size_t, sized a tiny segment, and then passed every later size check
+// against its own truncated value.
+TEST(StreamBufferTests, GeometryBeyondAddressSpaceThrows) {
+    if (kSizeTHoldsFourGiB) {
+        GTEST_SKIP() << "every valid geometry fits a 64-bit size_t";
+    }
+    EXPECT_THROW(stream_buffer(1ull << 32, 16), std::length_error);
+    EXPECT_THROW(stream_buffer(1ull << 32, 16, "ssb_oversized"), std::length_error);
+}
+
+// The default read_traits counts no loss - a semantic difference, not just a speed one: records
+// are still skipped correctly, but loss_count() stays 0 until you read through traits that ask
+// for it. Reset resynchronization, by contrast, is on by default because it measured free.
+TEST(StreamBufferTests, DefaultReadTraitsAreSilent) {
+    stream_buffer buf(1024, 4);  // tiny control ring, so the producer laps it
+    for (uint8_t i = 0; i < 8; ++i) {
+        publish_filled(buf, static_cast<char>('a' + i), 1);
+    }
+
+    uint64_t cursor = 0;
+    auto [ptr, len] = buf.read(cursor);  // default traits
+    ASSERT_NE(ptr, nullptr);
+    EXPECT_EQ(len, 1u);
+    EXPECT_EQ(ptr[0], 'e') << "the reader still skips to the oldest surviving record";
+    EXPECT_EQ(cursor, 5u);
+    EXPECT_EQ(buf.loss_count(), 0u) << "default traits do not accumulate loss_count()";
+
+    // The same read with counting enabled reports the four records that were skipped.
+    stream_buffer counted(1024, 4);
+    for (uint8_t i = 0; i < 8; ++i) {
+        publish_filled(counted, static_cast<char>('a' + i), 1);
+    }
+    uint64_t counted_cursor = 0;
+    ASSERT_NE(counted.read<dbg>(counted_cursor).first, nullptr);
+    EXPECT_EQ(counted.loss_count(), 4u);
 }

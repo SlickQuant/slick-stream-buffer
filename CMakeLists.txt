@@ -1,14 +1,16 @@
-cmake_minimum_required(VERSION 3.10)
+# 3.21 is the real floor: PROJECT_IS_TOP_LEVEL below is 3.21+, and FetchContent_MakeAvailable
+# is 3.14+.
+cmake_minimum_required(VERSION 3.21)
 
 project(slick-stream-buffer
-        VERSION 1.0.5
+        VERSION 2.0.0
         DESCRIPTION "A C++ lock-free SPMC byte stream buffer"
         LANGUAGES CXX)
 
-set(CMAKE_CXX_STANDARD 20)
-
 # Options:
 option(BUILD_SLICK_STREAM_BUFFER_TESTS "Build tests" ${PROJECT_IS_TOP_LEVEL})
+# Off by default: the benchmark is a measuring tool, not part of a normal build.
+option(BUILD_SLICK_STREAM_BUFFER_BENCH "Build benchmarks" OFF)
 
 find_package(slick-shm CONFIG QUIET)
 
@@ -21,11 +23,11 @@ if (NOT slick-shm_FOUND)
     FetchContent_Declare(
         slick-shm
         GIT_REPOSITORY https://github.com/SlickQuant/slick-shm.git
-        GIT_TAG v0.1.4 # See https://github.com/SlickQuant/slick-shm/releases for latest version
+        GIT_TAG v0.1.6 # See https://github.com/SlickQuant/slick-shm/releases for latest version
     )
     FetchContent_MakeAvailable(slick-shm)
 else()
-    message(STATUS "slick-shm: ${slick-shm_VERSION}")
+    message(STATUS "Found slick-shm ${slick-shm_VERSION}: ${slick-shm_DIR}")
 endif()
 
 add_library(slick-stream-buffer INTERFACE)
@@ -37,6 +39,12 @@ target_include_directories(slick-stream-buffer INTERFACE
 )
 set_target_properties(slick-stream-buffer PROPERTIES EXPORT_NAME stream_buffer)
 
+# The headers require C++20 ([[likely]]/[[unlikely]]). This must ride on the target, not on
+# CMAKE_CXX_STANDARD: that variable applies only to targets built here, so installed consumers
+# would silently compile the header under whatever standard they happen to use - C++17 via
+# slick::shm, which quietly drops the branch hints.
+target_compile_features(slick-stream-buffer INTERFACE cxx_std_20)
+
 target_link_libraries(slick-stream-buffer INTERFACE slick::shm)
 if(UNIX AND NOT APPLE)
     target_link_libraries(slick-stream-buffer INTERFACE rt atomic)
@@ -45,6 +53,10 @@ endif()
 if(BUILD_SLICK_STREAM_BUFFER_TESTS)
     enable_testing()
     add_subdirectory(tests)
+endif()
+
+if(BUILD_SLICK_STREAM_BUFFER_BENCH)
+    add_subdirectory(bench)
 endif()
 
 # Installation rules
