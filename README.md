@@ -238,13 +238,29 @@ them now produces a compiler warning and has no effect.
 - `uint64_t capacity()` / `uint32_t control_size()` — the configured geometry
 - `bool own_buffer()` — this instance created the buffer, rather than attaching to an existing one
 - `bool use_shm()` — backed by shared memory rather than local memory
+- `const char* shm_name()` — the shared memory segment name; an empty string (never `nullptr`)
+  for a local-memory buffer
 
 ### Shared-memory lifecycle
 
+- `bool remove_shm()` — unlink this buffer's segment name so the next creator starts fresh;
+  mappings already open, including this one, stay valid. Returns `false` for a local-memory buffer
 - `static bool remove(const char* shm_name)` — unlink a segment by name (POSIX; a no-op on
   Windows, where a section dies with its last handle)
 
-A crashed creator can leave a segment behind. On POSIX the name survives the process, so:
+**A buffer never removes its segment on destruction**, not even the buffer that created it. On
+POSIX the name stays until it is unlinked, so if a departing creator unlinked it while a peer was
+still attached, that peer would keep reading the old mapping while a restarted producer created a
+new segment under the same name. Instead, a restarted producer reattaches to the existing segment
+and carries on from its cursors, and the process that coordinates the buffer's lifetime calls
+`remove_shm()` (or `remove(name)`) once no peer will attach again:
+
+```cpp
+// Coordinator, after every peer has shut down
+buf.remove_shm();
+```
+
+A crashed creator can also leave a segment behind:
 
 - if it died **part-way through initialization**, the segment is stuck in the `INITIALIZING`
   state and every later creator and opener fails construction after a 2-second wait;
@@ -254,8 +270,8 @@ A crashed creator can leave a segment behind. On POSIX the name survives the pro
 Neither is recovered automatically: nothing portable can distinguish a dead creator from a slow
 one — a PID stamped in the header means nothing across PID namespaces and is unreliable under
 PID reuse — so taking a segment over is an explicit decision. The wedged-segment error names the
-step. Call `remove()` once at startup, when the application knows no other process is using the
-segment:
+step. To start clean instead of resuming, call `remove()` once at startup, when the application
+knows no other process is using the segment:
 
 ```cpp
 slick::stream_buffer::remove("my_stream");           // clear anything a previous run left

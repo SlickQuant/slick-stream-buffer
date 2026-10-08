@@ -196,7 +196,6 @@ class SlickStreamBuffer {
     bool use_shm_ = false;
     slick::shm::shared_memory shm_;   // RAII wrapper for shared memory
     void* lpvMem_ = nullptr;          // Cached data pointer
-    std::string shm_name_;            // Stored for cleanup
 
     // Shared memory layout constants
     //
@@ -332,21 +331,25 @@ public:
     SlickStreamBuffer& operator=(const SlickStreamBuffer&) = delete;
 
     virtual ~SlickStreamBuffer() noexcept {
-        if (use_shm_) {
-            // slick-shm RAII handles unmapping and closing automatically
-            // Only need to explicitly remove on POSIX if we're the owner
-#if !defined(_MSC_VER)
-            if (own_ && shm_.is_valid() && !shm_name_.empty()) {
-                slick::shm::shared_memory::remove(shm_name_.c_str());
-            }
-#endif
-        } else {
+        // A shared segment is never unlinked here, even by the buffer that created it.
+        // On POSIX the name outlives every mapping until shm_unlink(), so unlinking while a
+        // peer is still attached would orphan that peer on the old mapping while a restarted
+        // or late process silently creates a fresh segment under the same name. Removing
+        // the name is the coordinator's call, via remove_shm(), once every peer is done.
+        // shm_'s destructor unmaps and closes the handle.
+        if (!use_shm_) {
             delete[] data_;
             data_ = nullptr;
             delete[] control_;
             control_ = nullptr;
         }
     }
+
+    /**
+     * @brief Get the name of the shared memory segment, or an empty string for a local-memory
+     *        buffer. Never nullptr.
+     */
+    const char* shm_name() const noexcept { return shm_.name(); }
 
     /**
      * @brief Unlink a shared memory segment by name - the stale-segment recovery step
@@ -379,8 +382,26 @@ public:
     }
 
     /**
-     * @brief Check if the buffer owns the memory
-     * @return true if the buffer owns the memory, false otherwise
+     * @brief Remove this buffer's shared memory segment name so later buffers get a fresh segment
+     *
+     * The destructor never does this, because a peer may still be attached. Call it from the
+     * process that coordinates the buffer's lifetime once no peer will attach again. Mappings
+     * that are already open, including this buffer's own, stay valid until they are closed.
+     *
+     * @return true if the name was removed; false for a local-memory buffer or if removal
+     *         failed. Always true for a shared buffer on Windows, where the segment is freed
+     *         when its last handle closes and there is no name to remove.
+     */
+    bool remove_shm() noexcept {
+        return use_shm_ && remove(shm_.name());
+    }
+
+    /**
+     * @brief Check if this instance created the buffer, rather than attaching to an existing segment
+     *
+     * Creating a shared segment carries no cleanup duty: the destructor never removes the name.
+     * See remove_shm().
+     * @return true for a local-memory buffer or a creator that initialized a fresh segment
      */
     bool own_buffer() const noexcept { return own_; }
 
@@ -734,13 +755,14 @@ private:
     /// stamped PID is meaningless across PID namespaces and unreliable under PID reuse - so
     /// recovery is deliberately an explicit operator action via remove().
     std::string stale_segment_message(uint32_t state) const {
+        const std::string name = shm_.name();
         const std::string recovery = " Once no process is using it, clear it with "
-            "slick::stream_buffer::remove(\"" + shm_name_ + "\") and construct again.";
+            "slick::stream_buffer::remove(\"" + name + "\") and construct again.";
         if (state == INIT_STATE_INITIALIZING) {
-            return "Shared memory segment '" + shm_name_ + "' is stuck in the INITIALIZING state - "
+            return "Shared memory segment '" + name + "' is stuck in the INITIALIZING state - "
                 "a creator died part-way through initializing it." + recovery;
         }
-        return "Timed out waiting for shared memory '" + shm_name_ + "' to be initialized - the "
+        return "Timed out waiting for shared memory '" + name + "' to be initialized - the "
             "segment exists but no SlickStreamBuffer creator ever initialized it, so it may belong "
             "to another application." + recovery;
     }
@@ -790,8 +812,6 @@ private:
     }
 
     void allocate_shm_data(const char* const shm_name, bool open_only) {
-        shm_name_ = shm_name;  // Store for destructor cleanup
-
         if (open_only) {
             // Opener constructor - open existing only
             try {

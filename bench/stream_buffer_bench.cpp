@@ -163,6 +163,9 @@ int main(int argc, char** argv) {
         for (auto& t : threads) {
             t.join();
         }
+        // The destructor leaves the segment in place, so unlink the one this rep created: the
+        // next rep must create its own rather than attach to it, and none should outlive the run.
+        server.remove_shm();
 
         producer_ns.push_back(
             std::chrono::duration<double, std::nano>(t1 - t0).count() / double(messages));
