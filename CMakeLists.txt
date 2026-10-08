@@ -3,7 +3,7 @@
 cmake_minimum_required(VERSION 3.21)
 
 project(slick-stream-buffer
-        VERSION 2.0.0
+        VERSION 2.1.0
         DESCRIPTION "A C++ lock-free SPMC byte stream buffer"
         LANGUAGES CXX)
 

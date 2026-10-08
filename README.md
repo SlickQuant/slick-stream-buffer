@@ -82,7 +82,7 @@ set(BUILD_SLICK_STREAM_BUFFER_TESTS OFF CACHE BOOL "" FORCE)
 FetchContent_Declare(
     slick-stream-buffer
     GIT_REPOSITORY https://github.com/SlickQuant/slick-stream-buffer.git
-    GIT_TAG v2.0.0 # See https://github.com/SlickQuant/slick-stream-buffer/releases for latest version
+    GIT_TAG v2.1.0 # See https://github.com/SlickQuant/slick-stream-buffer/releases for latest version
 )
 FetchContent_MakeAvailable(slick-stream-buffer)
 

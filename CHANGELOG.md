@@ -1,6 +1,26 @@
 # Changelog
 
-## v2.0.0 -
+## v2.1.0 - 2026-10-08
+
+**Behavior change**
+- A shared-memory buffer no longer unlinks its segment on destruction, not even the buffer that
+  created it. On POSIX, a creator that exited first unlinked the name while peers were still
+  attached: they kept reading the orphaned mapping while a restarted producer silently created a
+  fresh segment under the same name, so the two never met again. The name now survives until the
+  process that coordinates the buffer's lifetime calls `remove_shm()` or `remove(name)`.
+  Applications that relied on the old cleanup will leave segments behind, and their next run
+  attaches to the old one instead of starting fresh - `own_buffer()` is `false`, reading resumes
+  from the old cursors, and a creator with a different geometry throws `geometry mismatch`. Call
+  `remove(name)` at startup to start clean, or `remove_shm()` at shutdown once every peer is done.
+- Not breaking: Windows is unaffected, since a section already died with its last handle, and the
+  shared-memory format is unchanged (`SSB1`), so 2.0 and 2.1 processes can share a segment.
+
+**Added**
+- `remove_shm()`: unlinks this buffer's segment name so the next creator starts fresh. Mappings
+  already open, including this buffer's own, stay valid. Returns `false` for a local-memory buffer.
+- `shm_name()`: the segment name, or an empty string (never `nullptr`) for a local-memory buffer.
+
+## v2.0.0 - 2026-09-07
 
 **Breaking**
 - The `SLICK_STREAM_BUFFER_ENABLE_LOSS_DETECTION`, `_RESET_DETECTION` and `_CPU_RELAX` macros are
